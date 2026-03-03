@@ -5,6 +5,10 @@
       <div style="margin-top: 16px;">
         <canvas ref="canvasRef" style="border: 1px solid #ccc; max-width: 100%;"></canvas>
       </div>
+      <div style="margin-top: 32px;">
+        <button @click="getDeviceData">Pobierz dane urządzenia</button>
+        <p>Current Location: {{ locationText }}</p>
+      </div>
   </main>
 </template>
 
@@ -12,6 +16,7 @@
 import * as pdfjsLib from "pdfjs-dist/legacy/build/pdf.mjs";
 import pdfWorker from "pdfjs-dist/build/pdf.worker.min.mjs?url";
 import { ref } from "vue";
+import { getCurrentPosition } from "@tauri-apps/plugin-geolocation";
 
 
   // Set the worker to parse PDF files
@@ -60,5 +65,27 @@ import { ref } from "vue";
         viewport,
       }).promise;
     }
+
+    const dateTime = ref("—");
+    const locationText = ref("—");
+
+    // Function to get the current date/time and device location
+    async function getDeviceData() {
+      dateTime.value = new Date().toLocaleString();
+
+      try {
+        const pos = await getCurrentPosition();
+
+        locationText.value = 
+          `${pos.coords.latitude.toFixed(6)}, 
+          ${pos.coords.longitude.toFixed(6)}`;
+      } catch (err) {
+        locationText.value = "Nie udało się pobrać lokalizacji.";
+        console.error(err);
+      }
+    }
+
+
+
 
 </script>
