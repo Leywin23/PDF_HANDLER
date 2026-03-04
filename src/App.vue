@@ -9,10 +9,7 @@
     </div>
 
     <div style="margin-top:24px">
-      <button @click="getDeviceData" :disabled="busy">
-        Pobierz dane urządzenia
-      </button>
-
+      <button @click="getDeviceData" :disabled="busy">Pobierz dane urządzenia</button>
       <p>Current Location: {{ locationText }}</p>
       <p>Data i godzina: {{ dateTime }}</p>
     </div>
@@ -24,13 +21,15 @@
       <p v-if="busy">Przetwarzam...</p>
     </div>
 
-    <hr style="margin:24px 0">
+    <hr style="margin:24px 0" />
 
     <div>
       <label>Certyfikat (.p12/.pfx):</label>
-      <input type="file"
-             accept=".p12,.pfx,application/x-pkcs12"
-             @change="onP12Selected" />
+      <input
+        type="file"
+        accept=".p12,.pfx,application/x-pkcs12"
+        @change="onP12Selected"
+      />
     </div>
 
     <div style="margin-top:8px">
@@ -38,12 +37,19 @@
       <input type="password" v-model="p12Password" />
     </div>
 
-    <div style="margin-top:16px">
+    <div style="margin-top:16px; display:flex; gap:12px; flex-wrap:wrap;">
       <button
-          @click="signWithCert"
-          :disabled="busy || !pdfBytes || !p12Bytes || !p12Password">
-
+        @click="signWithCert"
+        :disabled="busy || !pdfBytes || !p12Bytes || !p12Password"
+      >
         Podpisz certyfikatem
+      </button>
+
+      <button
+        @click="downloadPdf"
+        :disabled="busy || !pdfBytes"
+      >
+        Pobierz PDF
       </button>
     </div>
 
@@ -96,7 +102,9 @@ const RENDER_DPR = 1;
 /* ================= HELPERS ================= */
 
 function toExactArrayBuffer(bytes: Uint8Array): ArrayBuffer {
-  return bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength);
+  // zawsze zwraca "czysty" ArrayBuffer (nie SharedArrayBuffer)
+  const copy = bytes.slice(); // tworzy nowy Uint8Array
+  return copy.buffer;
 }
 
 function nextFrame(): Promise<void> {
@@ -107,24 +115,18 @@ async function destroyPdfJs() {
   try {
     if (loadingTask?.destroy) await loadingTask.destroy();
   } catch {}
-
   loadingTask = null;
   pdfDoc = null;
 }
 
-/* ================= LOAD PDF ================= */
-
 async function loadPdfJsDoc(bytes: Uint8Array) {
   await destroyPdfJs();
-
   const data = toExactArrayBuffer(bytes);
   loadingTask = pdfjsLib.getDocument({ data });
-
   pdfDoc = await loadingTask.promise;
 }
 
 async function renderPage(pageNumber: number) {
-
   if (!pdfDoc) return;
 
   const safePage = Math.max(1, Math.min(pageNumber, pdfDoc.numPages));
@@ -147,31 +149,40 @@ async function renderPage(pageNumber: number) {
   ctx.setTransform(RENDER_DPR, 0, 0, RENDER_DPR, 0, 0);
   ctx.clearRect(0, 0, canvas.width, canvas.height);
 
-  await page.render({
-    canvas,
-    canvasContext: ctx,
-    viewport
-  }).promise;
+  await page.render({ canvas, canvasContext: ctx, viewport }).promise;
+}
+
+function downloadPdf() {
+  if (!pdfBytes.value) return;
+
+  // ważne: wyciągamy dokładny ArrayBuffer o właściwej długości
+  const ab = toExactArrayBuffer(pdfBytes.value);
+
+  const blob = new Blob([ab], { type: "application/pdf" });
+  const url = URL.createObjectURL(blob);
+
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = "signed.pdf";
+  a.click();
+
+  URL.revokeObjectURL(url);
 }
 
 /* ================= PDF SELECT ================= */
 
 async function onPdfSelected(e: Event) {
-
   const input = e.target as HTMLInputElement;
   const file = input.files?.[0];
   if (!file) return;
 
   busy.value = true;
-
   try {
-
     const ab = await file.arrayBuffer();
     pdfBytes.value = new Uint8Array(ab);
 
     await loadPdfJsDoc(pdfBytes.value);
     await renderPage(1);
-
   } finally {
     busy.value = false;
   }
@@ -180,39 +191,29 @@ async function onPdfSelected(e: Event) {
 /* ================= GEO ================= */
 
 async function getDeviceData() {
-
   dateTime.value = new Date().toLocaleString();
 
   try {
-
     let perms = await checkPermissions();
-
     if (perms.location !== "granted") {
       perms = await requestPermissions(["location"]);
     }
-
     if (perms.location !== "granted") {
       locationText.value = "Permission denied";
       return;
     }
 
     const pos = await getCurrentPosition();
-
-    locationText.value =
-        `${pos.coords.latitude.toFixed(6)}, ${pos.coords.longitude.toFixed(6)}`;
-
+    locationText.value = `${pos.coords.latitude.toFixed(6)}, ${pos.coords.longitude.toFixed(6)}`;
   } catch (err) {
-
     console.error(err);
     locationText.value = "Location error";
-
   }
 }
 
 /* ================= VISUAL SIGN ================= */
 
 async function addVisualSignatureFast(bytes: Uint8Array): Promise<Uint8Array> {
-
   const doc = await PDFLibDocument.load(bytes);
 
   const pages = doc.getPages();
@@ -222,14 +223,12 @@ async function addVisualSignatureFast(bytes: Uint8Array): Promise<Uint8Array> {
 
   const boxWidth = 240;
   const boxHeight = 70;
-
   const margin = 20;
 
   const x = width - boxWidth - margin;
   const y = margin;
 
   const font = await doc.embedFont(StandardFonts.Helvetica);
-
   const now = new Date().toLocaleString();
 
   page.drawRectangle({
@@ -264,68 +263,58 @@ async function addVisualSignatureFast(bytes: Uint8Array): Promise<Uint8Array> {
   });
 
   const out = await doc.save();
-
   return new Uint8Array(out);
 }
 
 async function signPdfFast() {
-
   if (!pdfBytes.value) return;
 
   busy.value = true;
-
   try {
-
     if (locationText.value === "—") {
       await getDeviceData();
       await nextFrame();
     }
 
     const signed = await addVisualSignatureFast(pdfBytes.value);
-
     pdfBytes.value = signed;
 
     await loadPdfJsDoc(signed);
-
     await renderPage(Number.MAX_SAFE_INTEGER);
-
   } finally {
-
     busy.value = false;
-
   }
 }
 
 /* ================= CERT SELECT ================= */
 
 async function onP12Selected(e: Event) {
-
   const input = e.target as HTMLInputElement;
   const file = input.files?.[0];
-
   if (!file) return;
 
   const ab = await file.arrayBuffer();
-
   p12Bytes.value = new Uint8Array(ab);
 }
 
 /* ================= SIGN WITH CERT ================= */
 
 async function signWithCert() {
-
   if (!pdfBytes.value || !p12Bytes.value) return;
 
   busy.value = true;
-  if (locationText.value === "—" || dateTime.value === "—") {
-    await getDeviceData();
-  }
 
   try {
+    if (locationText.value === "—" || dateTime.value === "—") {
+      await getDeviceData();
+      await nextFrame();
+    }
 
-    const signed: number[] = await invoke("sign_pdf_pades", {
-      pdfBytes: Array.from(pdfBytes.value!),
-      p12Bytes: Array.from(p12Bytes.value!),
+    // 🚨 WAŻNE: nazwy pól muszą pasować do Rusta
+    // Jeśli Rust ma: pdf_bytes, p12_bytes, signing_time → tu też tak wysyłamy
+    const signed = await invoke<number[]>("sign_pdf_pades", {
+      pdfBytes: Array.from(pdfBytes.value),
+      p12Bytes: Array.from(p12Bytes.value),
       password: p12Password.value,
       reason: "Signed in app",
       location: locationText.value,
@@ -335,17 +324,15 @@ async function signWithCert() {
     pdfBytes.value = new Uint8Array(signed);
 
     await loadPdfJsDoc(pdfBytes.value);
-
     await renderPage(Number.MAX_SAFE_INTEGER);
 
+    // opcjonalnie automatycznie pobierz po podpisie:
+    // downloadPdf();
+
   } catch (err) {
-
     console.error("SIGN ERROR:", err);
-
   } finally {
-
     busy.value = false;
-
   }
 }
 </script>
