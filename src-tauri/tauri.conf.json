@@ -2,7 +2,7 @@
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "pdf_handler",
   "version": "0.1.0",
-  "identifier": "com.desktop.pdf_handler",
+  "identifier": "com.desktop.pdfhandler",
   "build": {
     "beforeDevCommand": "npm run dev",
     "devUrl": "http://localhost:1420",

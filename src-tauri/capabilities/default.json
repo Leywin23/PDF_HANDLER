@@ -7,8 +7,8 @@
   ],
   "permissions": [
     "core:default",
-    "geolocation:allow-get-current-position",
     "geolocation:allow-check-permissions",
-    "geolocation:allow-request-permissions"
+    "geolocation:allow-request-permissions",
+    "geolocation:allow-get-current-position"
   ]
 }
