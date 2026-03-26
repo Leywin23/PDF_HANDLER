@@ -19,7 +19,7 @@ android {
     defaultConfig {
         manifestPlaceholders["usesCleartextTraffic"] = "false"
         applicationId = "com.desktop.pdfhandler"
-        minSdk = 24
+        minSdk = 28
         targetSdk = 36
         versionCode = tauriProperties.getProperty("tauri.android.versionCode", "1").toInt()
         versionName = tauriProperties.getProperty("tauri.android.versionName", "1.0")
@@ -51,6 +51,17 @@ android {
     buildFeatures {
         buildConfig = true
     }
+    packaging {
+        resources {
+            excludes += listOf(
+                "META-INF/versions/9/OSGI-INF/MANIFEST.MF",
+                "META-INF/BCKEY.DSA",
+                "META-INF/BCKEY.SF",
+                "META-INF/BCPROV.DSA",
+                "META-INF/BCPROV.SF"
+            )
+        }
+    }
 }
 
 rust {
@@ -62,6 +73,14 @@ dependencies {
     implementation("androidx.appcompat:appcompat:1.7.1")
     implementation("androidx.activity:activity-ktx:1.10.1")
     implementation("com.google.android.material:material:1.12.0")
+
+    // Biometric
+    implementation("androidx.biometric:biometric:1.1.0")
+
+    // BouncyCastle (CMS signing)
+    implementation("org.bouncycastle:bcprov-jdk18on:1.78.1")
+    implementation("org.bouncycastle:bcpkix-jdk18on:1.78.1")
+
     testImplementation("junit:junit:4.13.2")
     androidTestImplementation("androidx.test.ext:junit:1.1.4")
     androidTestImplementation("androidx.test.espresso:espresso-core:3.5.0")

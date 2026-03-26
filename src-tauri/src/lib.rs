@@ -1,10 +1,9 @@
 // Learn more about Tauri commands at https://tauri.app/develop/calling-rust/
 
-use windows::Win32::Security::Cryptography::*;
-use windows::core::{PCWSTR, PSTR};
+mod crypto;
 
-use lopdf::{Document, Object, Dictionary, StringFormat};
-
+use lopdf::{Dictionary, Document, Object, StringFormat};
+use serde::{Deserialize, Serialize};
 const SIG_PLACEHOLDER_HEX_LEN: usize = 40000;
 const SIG_PLACEHOLDER_BYTES_LEN: usize = SIG_PLACEHOLDER_HEX_LEN / 2;
 
@@ -13,16 +12,45 @@ fn greet(name: &str) -> String {
     format!("Hello, {}! You've been greeted from Rust!", name)
 }
 
+#[derive(Serialize, Deserialize)]
+struct PreparedPdfSignature {
+    pdf_with_br: Vec<u8>,
+    tbs: Vec<u8>,
+}
+
+#[tauri::command]
+fn finalize_pdf_signature(
+    pdf_with_br: Vec<u8>,
+    cms_der: Vec<u8>,
+) -> Result<Vec<u8>, String> {
+    patch_contents_only(pdf_with_br, &cms_der)
+}
+
+
+
+#[tauri::command]
+fn prepare_pdf_for_external_sign(pdf_bytes: Vec<u8>) -> Result<PreparedPdfSignature, String> {
+    let pdf_with_placeholder = add_sig_placeholder(&pdf_bytes)?;
+    let pdf_with_br = patch_byte_range_only(pdf_with_placeholder)?;
+
+    let (cut_start, cut_end, _hex_start, _hex_end) = find_sig_contents_ranges(&pdf_with_br)?;
+
+    let mut tbs = Vec::new();
+    tbs.extend_from_slice(&pdf_with_br[..cut_start]);
+    tbs.extend_from_slice(&pdf_with_br[cut_end..]);
+
+    Ok(PreparedPdfSignature { pdf_with_br, tbs })
+}
+
 #[tauri::command]
 fn sign_pdf_pades(
-  pdf_bytes: Vec<u8>,
-  p12_bytes: Vec<u8>,
-  password: String,
-  reason: Option<String>,
-  location: Option<String>,
-  signing_time: Option<String>,
+    pdf_bytes: Vec<u8>,
+    p12_bytes: Vec<u8>,
+    password: String,
+    reason: Option<String>,
+    location: Option<String>,
+    signing_time: Option<String>,
 ) -> Result<Vec<u8>, String> {
-
     println!(
         "sign_pdf_pades: pdf={} bytes, p12={} bytes, reason={:?}, location={:?}, signing_time={:?}",
         pdf_bytes.len(),
@@ -45,92 +73,40 @@ fn sign_pdf_pades(
     tbs.extend_from_slice(&pdf_with_br[cut_end..]);
 
     // 4. podpis CMS
-    let sig_der = pkcs7_detached_from_pfx(&p12_bytes, &password, &tbs)?;
+    let sig_der = crypto::pkcs7_detached_from_pfx(&p12_bytes, &password, &tbs)?;
     println!("CMS len = {}", sig_der.len());
 
     // 5. wklej CMS
     let signed_pdf = patch_contents_only(pdf_with_br, &sig_der)?;
     println!("Signed PDF len = {}", signed_pdf.len());
-    println!("Signed PDF head = {:?}", &signed_pdf[..std::cmp::min(12, signed_pdf.len())]);
+
     Ok(signed_pdf)
 }
 
+
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    tauri::Builder::default()
+    #[allow(unused_mut)]
+    let mut builder = tauri::Builder::default()
         .plugin(tauri_plugin_geolocation::init())
         .plugin(tauri_plugin_opener::init())
-        .invoke_handler(tauri::generate_handler![greet, sign_pdf_pades])
+        .plugin(tauri_plugin_keystore::init())
+        .invoke_handler(tauri::generate_handler![
+            greet,
+            sign_pdf_pades,
+            prepare_pdf_for_external_sign,
+            finalize_pdf_signature
+        ]);
+
+    #[cfg(mobile)]
+    {
+        builder = builder.plugin(tauri_plugin_biometric::init());
+    }
+
+    builder
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
-}
-
-fn pkcs7_detached_from_pfx(
-    pfx: &[u8],
-    password: &str,
-    data: &[u8],
-) -> Result<Vec<u8>, String> {
-
-    unsafe {
-
-        let mut blob = CRYPT_INTEGER_BLOB {
-            cbData: pfx.len() as u32,
-            pbData: pfx.as_ptr() as *mut u8,
-        };
-
-        let mut pw: Vec<u16> = password.encode_utf16().collect();
-        pw.push(0);
-
-        let store = PFXImportCertStore(&mut blob, PCWSTR(pw.as_ptr()), CRYPT_USER_KEYSET)
-            .map_err(|e| format!("PFXImportCertStore failed: {e:?}"))?;
-
-        let cert_ctx = CertEnumCertificatesInStore(store, None);
-
-        if cert_ctx.is_null() {
-            return Err("no cert".into());
-        }
-
-        let mut para: CRYPT_SIGN_MESSAGE_PARA = std::mem::zeroed();
-
-        para.cbSize = std::mem::size_of::<CRYPT_SIGN_MESSAGE_PARA>() as u32;
-        para.dwMsgEncodingType = (X509_ASN_ENCODING.0 | PKCS_7_ASN_ENCODING.0) as u32;
-        para.pSigningCert = cert_ctx;
-        para.HashAlgorithm.pszObjId = PSTR(szOID_RSA_SHA256RSA.as_ptr() as *mut u8);
-
-        para.cMsgCert = 1;
-
-        let mut certs = [cert_ctx];
-        para.rgpMsgCert = certs.as_mut_ptr();
-
-        let rgpb = [data.as_ptr()];
-        let rgcb = [data.len() as u32];
-
-        let mut out_len = 0;
-
-        CryptSignMessage(
-            &para,
-            true,
-            1,
-            Some(rgpb.as_ptr()),
-            rgcb.as_ptr(),
-            None,
-            &mut out_len,
-        ).map_err(|e| format!("{e:?}"))?;
-
-        let mut out = vec![0u8; out_len as usize];
-
-        CryptSignMessage(
-            &para,
-            true,
-            1,
-            Some(rgpb.as_ptr()),
-            rgcb.as_ptr(),
-            Some(out.as_mut_ptr()),
-            &mut out_len,
-        ).map_err(|e| format!("{e:?}"))?;
-
-        Ok(out)
-    }
 }
 
 fn add_sig_placeholder(pdf: &[u8]) -> Result<Vec<u8>, String> {

@@ -11,8 +11,10 @@
   },
   "dependencies": {
     "@tauri-apps/api": "^2",
+    "@tauri-apps/plugin-biometric": "^2.3.2",
     "@tauri-apps/plugin-geolocation": "^2.3.2",
     "@tauri-apps/plugin-opener": "^2",
+    "axios": "^1.13.6",
     "pdf-lib": "^1.17.1",
     "pdfjs-dist": "^5.4.624",
     "vue": "^3.5.13"
